@@ -20,213 +20,240 @@ namespace sjtu {
      * Note that insertion order is not affected if a key is re-inserted
      * into the map.
      */
-    
-template<
-	class Key,
-	class T,
-	class Hash = std::hash<Key>, 
-	class Equal = std::equal_to<Key>
-> class linked_hashmap {
-public:
-	/**
-	 * the internal type of data.
-	 * it should have a default constructor, a copy constructor.
-	 * You can use sjtu::linked_hashmap as value_type by typedef.
-	 */
-	typedef pair<const Key, T> value_type;
- 
-	/**
-	 * see BidirectionalIterator at CppReference for help.
-	 *
-	 * if there is anything wrong throw invalid_iterator.
-	 *     like it = linked_hashmap.begin(); --it;
-	 *       or it = linked_hashmap.end(); ++end();
-	 */
-	class const_iterator;
-	class iterator {
-	private:
-		/**
-		 * TODO add data members
-		 *   just add whatever you want.
-		 */
+
+	template<
+		class Key,
+		class T,
+		class Hash = std::hash<Key>,
+		class Equal = std::equal_to<Key>
+	> class linked_hashmap {
 	public:
-		// The following code is written for the C++ type_traits library.
-		// Type traits is a C++ feature for describing certain properties of a type.
-		// For instance, for an iterator, iterator::value_type is the type that the 
-		// iterator points to. 
-		// STL algorithms and containers may use these type_traits (e.g. the following 
-		// typedef) to work properly. 
-		// See these websites for more information:
-		// https://en.cppreference.com/w/cpp/header/type_traits
-		// About value_type: https://blog.csdn.net/u014299153/article/details/72419713
-		// About iterator_category: https://en.cppreference.com/w/cpp/iterator
-		using difference_type = std::ptrdiff_t;
-		using value_type = typename linked_hashmap::value_type;
-		using pointer = value_type*;
-		using reference = value_type&;
-		using iterator_category = std::output_iterator_tag;
+		/**
+		 * the internal type of data.
+		 * it should have a default constructor, a copy constructor.
+		 * You can use sjtu::linked_hashmap as value_type by typedef.
+		 */
+		typedef pair<const Key, T> value_type;
+	private:
+		struct Node {
+			value_type kv;
+			Node *prev, *next;    // insertion-order list
+			Node *hnext;          // bucket chain
+			Node(const value_type &v) : kv(v), prev(nullptr), next(nullptr), hnext(nullptr) {}
+		};
+		Node **buckets = nullptr;
+		size_t bucket_cnt = 0;
+		size_t elem_cnt = 0;
+		Node *head = nullptr;
+		Node *tail = nullptr;
+		Hash hasher;
+		Equal equaler;
+		static constexpr double load_factor_limit = 0.75;
+		static constexpr size_t initial_bucket_cnt = 16;
 
-
-		iterator() {
-			// TODO
+		size_t bucket_index(const Key &key) const {
+			return static_cast<size_t>(hasher(key)) % bucket_cnt;
 		}
-		iterator(const iterator &other) {
-			// TODO
+		void ensure_capacity() {
+			if (bucket_cnt == 0) rehash(initial_bucket_cnt);
+			if (elem_cnt + 1 > static_cast<size_t>(bucket_cnt * load_factor_limit)) {
+				rehash(bucket_cnt * 2);
+			}
 		}
-		/**
-		 * TODO iter++
-		 */
-		iterator operator++(int) {}
-		/**
-		 * TODO ++iter
-		 */
-		iterator & operator++() {}
-		/**
-		 * TODO iter--
-		 */
-		iterator operator--(int) {}
-		/**
-		 * TODO --iter
-		 */
-		iterator & operator--() {}
-		/**
-		 * a operator to check whether two iterators are same (pointing to the same memory).
-		 */
-		value_type & operator*() const {}
-		bool operator==(const iterator &rhs) const {}
-		bool operator==(const const_iterator &rhs) const {}
-		/**
-		 * some other operator for iterator.
-		 */
-		bool operator!=(const iterator &rhs) const {}
-		bool operator!=(const const_iterator &rhs) const {}
-
-		/**
-		 * for the support of it->first. 
-		 * See <http://kelvinh.github.io/blog/2013/11/20/overloading-of-member-access-operator-dash-greater-than-symbol-in-cpp/> for help.
-		 */
-		value_type* operator->() const noexcept {}
-	};
- 
-	class const_iterator {
-		// it should has similar member method as iterator.
-		//  and it should be able to construct from an iterator.
+		void rehash(size_t new_cnt) {
+			Node **new_buckets = new Node*[new_cnt];
+			for (size_t i = 0; i < new_cnt; ++i) new_buckets[i] = nullptr;
+			for (Node *p = head; p != nullptr; p = p->next) {
+				p->hnext = nullptr;
+				size_t idx = static_cast<size_t>(hasher(p->kv.first)) % new_cnt;
+				p->hnext = new_buckets[idx];
+				new_buckets[idx] = p;
+			}
+			delete [] buckets;
+			buckets = new_buckets;
+			bucket_cnt = new_cnt;
+		}
+		Node* find_node(const Key &key) const {
+			if (bucket_cnt == 0) return nullptr;
+			size_t idx = bucket_index(key);
+			for (Node *p = buckets[idx]; p != nullptr; p = p->hnext) {
+				if (equaler(p->kv.first, key)) return p;
+			}
+			return nullptr;
+		}
+		void unlink_from_list(Node *p) {
+			if (p->prev) p->prev->next = p->next; else head = p->next;
+			if (p->next) p->next->prev = p->prev; else tail = p->prev;
+		}
+		void unlink_from_bucket(Node *p) {
+			size_t idx = bucket_index(p->kv.first);
+			Node *cur = buckets[idx], *prev = nullptr;
+			while (cur) {
+				if (cur == p) {
+					if (prev) prev->hnext = cur->hnext; else buckets[idx] = cur->hnext;
+					return;
+				}
+				prev = cur; cur = cur->hnext;
+			}
+		}
+	public:
+		class const_iterator;
+		class iterator {
 		private:
-			// data members.
+			linked_hashmap *mp = nullptr;
+			Node *node = nullptr;
+			friend class const_iterator;
+			friend class linked_hashmap;
 		public:
-			const_iterator() {
-				// TODO
+			using difference_type = std::ptrdiff_t;
+			using value_type = typename linked_hashmap::value_type;
+			using pointer = value_type*;
+			using reference = value_type&;
+			using iterator_category = std::bidirectional_iterator_tag;
+
+			iterator() = default;
+			iterator(linked_hashmap *m, Node *n) : mp(m), node(n) {}
+			iterator(const iterator &other) = default;
+			iterator operator++(int) { iterator tmp(*this); ++(*this); return tmp; }
+			iterator & operator++() {
+				if (node == nullptr) throw invalid_iterator();
+				node = node->next;
+				return *this;
 			}
-			const_iterator(const const_iterator &other) {
-				// TODO
+			iterator operator--(int) { iterator tmp(*this); --(*this); return tmp; }
+			iterator & operator--() {
+				if (mp == nullptr) throw invalid_iterator();
+				if (node == nullptr) { if (mp->tail == nullptr) throw invalid_iterator(); node = mp->tail; return *this; }
+				if (node->prev == nullptr) throw invalid_iterator();
+				node = node->prev; return *this;
 			}
-			const_iterator(const iterator &other) {
-				// TODO
+			value_type & operator*() const { if (node == nullptr) throw invalid_iterator(); return node->kv; }
+			bool operator==(const iterator &rhs) const { return mp == rhs.mp && node == rhs.node; }
+			bool operator==(const const_iterator &rhs) const { return mp == rhs.mp && node == rhs.node; }
+			bool operator!=(const iterator &rhs) const { return !(*this == rhs); }
+			bool operator!=(const const_iterator &rhs) const { return !(mp == rhs.mp && node == rhs.node); }
+			value_type* operator->() const noexcept { return &node->kv; }
+		};
+
+		class const_iterator {
+		private:
+			const linked_hashmap *mp = nullptr;
+			const Node *node = nullptr;
+			friend class iterator;
+			friend class linked_hashmap;
+		public:
+			using difference_type = std::ptrdiff_t;
+			using value_type = typename linked_hashmap::value_type;
+			using pointer = const value_type*;
+			using reference = const value_type&;
+			using iterator_category = std::bidirectional_iterator_tag;
+			const_iterator() = default;
+			const_iterator(const linked_hashmap *m, const Node *n) : mp(m), node(n) {}
+			const_iterator(const const_iterator &other) = default;
+			const_iterator(const iterator &other) : mp(other.mp), node(other.node) {}
+			const_iterator operator++(int) { const_iterator tmp(*this); ++(*this); return tmp; }
+			const_iterator & operator++() { if (node == nullptr) throw invalid_iterator(); node = node->next; return *this; }
+			const_iterator operator--(int) { const_iterator tmp(*this); --(*this); return tmp; }
+			const_iterator & operator--() {
+				if (mp == nullptr) throw invalid_iterator();
+				if (node == nullptr) { if (mp->tail == nullptr) throw invalid_iterator(); node = mp->tail; return *this; }
+				if (node->prev == nullptr) throw invalid_iterator();
+				node = node->prev; return *this;
 			}
-			// And other methods in iterator.
-			// And other methods in iterator.
-			// And other methods in iterator.
+			reference operator*() const { if (node == nullptr) throw invalid_iterator(); return node->kv; }
+			bool operator==(const const_iterator &rhs) const { return mp == rhs.mp && node == rhs.node; }
+			bool operator==(const iterator &rhs) const { return rhs == *this; }
+			bool operator!=(const const_iterator &rhs) const { return !(*this == rhs); }
+			bool operator!=(const iterator &rhs) const { return !(rhs == *this); }
+			pointer operator->() const noexcept { return &node->kv; }
+		};
+
+		linked_hashmap() { rehash(initial_bucket_cnt); }
+		linked_hashmap(const linked_hashmap &other) : hasher(other.hasher), equaler(other.equaler) {
+			rehash(other.bucket_cnt ? other.bucket_cnt : initial_bucket_cnt);
+			for (Node *p = other.head; p != nullptr; p = p->next) insert(p->kv);
+		}
+		linked_hashmap & operator=(const linked_hashmap &other) {
+			if (this == &other) return *this;
+			clear();
+			hasher = other.hasher; equaler = other.equaler;
+			rehash(other.bucket_cnt ? other.bucket_cnt : initial_bucket_cnt);
+			for (Node *p = other.head; p != nullptr; p = p->next) insert(p->kv);
+			return *this;
+		}
+		~linked_hashmap() { clear(); delete [] buckets; buckets = nullptr; bucket_cnt = 0; }
+
+		T & at(const Key &key) {
+			Node *p = find_node(key);
+			if (!p) throw index_out_of_bound();
+			return p->kv.second;
+		}
+		const T & at(const Key &key) const {
+			Node *p = find_node(key);
+			if (!p) throw index_out_of_bound();
+			return p->kv.second;
+		}
+
+		T & operator[](const Key &key) {
+			Node *p = find_node(key);
+			if (p) return p->kv.second;
+			ensure_capacity();
+			value_type v(key, T());
+			Node *n = new Node(v);
+			if (tail) { tail->next = n; n->prev = tail; tail = n; }
+			else { head = tail = n; }
+			size_t idx = bucket_index(key);
+			n->hnext = buckets[idx]; buckets[idx] = n;
+			++elem_cnt;
+			return n->kv.second;
+		}
+
+		const T & operator[](const Key &key) const {
+			Node *p = find_node(key);
+			if (!p) throw index_out_of_bound();
+			return p->kv.second;
+		}
+
+		iterator begin() { return iterator(this, head); }
+		const_iterator cbegin() const { return const_iterator(this, head); }
+		iterator end() { return iterator(this, nullptr); }
+		const_iterator cend() const { return const_iterator(this, nullptr); }
+
+		bool empty() const { return elem_cnt == 0; }
+		size_t size() const { return elem_cnt; }
+
+		void clear() {
+			Node *p = head; while (p) { Node *n = p->next; delete p; p = n; }
+			head = tail = nullptr; elem_cnt = 0;
+			if (buckets) { for (size_t i = 0; i < bucket_cnt; ++i) buckets[i] = nullptr; }
+		}
+
+		pair<iterator, bool> insert(const value_type &value) {
+			Node *ex = find_node(value.first);
+			if (ex) return pair<iterator,bool>(iterator(this, ex), false);
+			ensure_capacity();
+			Node *n = new Node(value);
+			if (tail) { tail->next = n; n->prev = tail; tail = n; }
+			else { head = tail = n; }
+			size_t idx = bucket_index(value.first);
+			n->hnext = buckets[idx]; buckets[idx] = n;
+			++elem_cnt;
+			return pair<iterator,bool>(iterator(this, n), true);
+		}
+
+		void erase(iterator pos) {
+			if (pos.mp != this || pos.node == nullptr) throw invalid_iterator();
+			Node *p = pos.node;
+			unlink_from_list(p);
+			unlink_from_bucket(p);
+			delete p; --elem_cnt;
+		}
+
+		size_t count(const Key &key) const { return find_node(key) ? 1 : 0; }
+
+		iterator find(const Key &key) { return iterator(this, find_node(key)); }
+		const_iterator find(const Key &key) const { return const_iterator(this, find_node(key)); }
 	};
- 
-	/**
-	 * TODO two constructors
-	 */
-	linked_hashmap() {}
-	linked_hashmap(const linked_hashmap &other) {}
- 
-	/**
-	 * TODO assignment operator
-	 */
-	linked_hashmap & operator=(const linked_hashmap &other) {}
- 
-	/**
-	 * TODO Destructors
-	 */
-	~linked_hashmap() {}
- 
-	/**
-	 * TODO
-	 * access specified element with bounds checking
-	 * Returns a reference to the mapped value of the element with key equivalent to key.
-	 * If no such element exists, an exception of type `index_out_of_bound'
-	 */
-	T & at(const Key &key) {}
-	const T & at(const Key &key) const {}
- 
-	/**
-	 * TODO
-	 * access specified element 
-	 * Returns a reference to the value that is mapped to a key equivalent to key,
-	 *   performing an insertion if such key does not already exist.
-	 */
-	T & operator[](const Key &key) {}
- 
-	/**
-	 * behave like at() throw index_out_of_bound if such key does not exist.
-	 */
-	const T & operator[](const Key &key) const {}
- 
-	/**
-	 * return a iterator to the beginning
-	 */
-	iterator begin() {}
-	const_iterator cbegin() const {}
- 
-	/**
-	 * return a iterator to the end
-	 * in fact, it returns past-the-end.
-	 */
-	iterator end() {}
-	const_iterator cend() const {}
- 
-	/**
-	 * checks whether the container is empty
-	 * return true if empty, otherwise false.
-	 */
-	bool empty() const {}
- 
-	/**
-	 * returns the number of elements.
-	 */
-	size_t size() const {}
- 
-	/**
-	 * clears the contents
-	 */
-	void clear() {}
- 
-	/**
-	 * insert an element.
-	 * return a pair, the first of the pair is
-	 *   the iterator to the new element (or the element that prevented the insertion), 
-	 *   the second one is true if insert successfully, or false.
-	 */
-	pair<iterator, bool> insert(const value_type &value) {}
- 
-	/**
-	 * erase the element at pos.
-	 *
-	 * throw if pos pointed to a bad element (pos == this->end() || pos points an element out of this)
-	 */
-	void erase(iterator pos) {}
- 
-	/**
-	 * Returns the number of elements with key 
-	 *   that compares equivalent to the specified argument,
-	 *   which is either 1 or 0 
-	 *     since this container does not allow duplicates.
-	 */
-	size_t count(const Key &key) const {}
- 
-	/**
-	 * Finds an element with key equivalent to key.
-	 * key value of the element to search for.
-	 * Iterator to an element with key equivalent to key.
-	 *   If no such element is found, past-the-end (see end()) iterator is returned.
-	 */
-	iterator find(const Key &key) {}
-	const_iterator find(const Key &key) const {}
-};
 
 }
 
